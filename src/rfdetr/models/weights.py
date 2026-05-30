@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import math
 import os
+from collections.abc import Mapping
 from typing import Any, List
 
 import torch
@@ -114,6 +115,51 @@ def _slice_query_param_per_group(
     keep_per_group = min(target_num_queries, ckpt_num_queries)
     pieces = [tensor[g * ckpt_num_queries : g * ckpt_num_queries + keep_per_group] for g in range(keep_groups)]
     return torch.cat(pieces, dim=0)
+
+
+def _expand_query_param_per_group(
+    sliced_tensor: torch.Tensor,
+    target_tensor: torch.Tensor,
+    ckpt_num_queries: int,
+    ckpt_group_detr: int,
+    target_num_queries: int,
+    target_group_detr: int,
+) -> torch.Tensor:
+    """Copy checkpoint query prefixes into a larger randomly initialized target tensor.
+
+    Args:
+        sliced_tensor: Compact per-group tensor returned by :func:`_slice_query_param_per_group`.
+        target_tensor: Model-initialized tensor with the desired target shape.
+        ckpt_num_queries: Number of object queries per group in the checkpoint.
+        ckpt_group_detr: Number of query groups in the checkpoint.
+        target_num_queries: Number of object queries per group in the model.
+        target_group_detr: Number of query groups in the model.
+
+    Returns:
+        Tensor with target shape. Checkpoint rows are copied into each target
+        group's prefix; extra query slots keep the model's random initialization.
+    """
+    keep_groups = min(target_group_detr, ckpt_group_detr)
+    keep_per_group = min(target_num_queries, ckpt_num_queries)
+    expected_rows = keep_groups * keep_per_group
+    if sliced_tensor.shape[0] != expected_rows:
+        return sliced_tensor
+    if sliced_tensor.shape[1:] != target_tensor.shape[1:]:
+        return sliced_tensor
+    if sliced_tensor.shape[0] > target_tensor.shape[0]:
+        return sliced_tensor
+
+    expanded = target_tensor.detach().clone()
+    for group_idx in range(keep_groups):
+        src_start = group_idx * keep_per_group
+        src_end = src_start + keep_per_group
+        dst_start = group_idx * target_num_queries
+        dst_end = dst_start + keep_per_group
+        expanded[dst_start:dst_end] = sliced_tensor[src_start:src_end].to(
+            device=expanded.device,
+            dtype=expanded.dtype,
+        )
+    return expanded
 
 
 def _filter_intentional_keys(keys: list[str]) -> list[str]:
@@ -449,17 +495,39 @@ def load_pretrain_weights(
             "the checkpoint was trained with group_detr > 1.",
             mc.group_detr,
         )
+    model_state_raw = nn_model.state_dict()
+    model_state = model_state_raw if isinstance(model_state_raw, Mapping) else {}
     for name in list(checkpoint["model"].keys()):
         if any(name.endswith(x) for x in _QUERY_PARAM_SUFFIXES):
             tensor = checkpoint["model"][name]
             if ckpt_num_queries is not None and ckpt_group_detr is not None:
-                checkpoint["model"][name] = _slice_query_param_per_group(
+                query_tensor = _slice_query_param_per_group(
                     tensor,
                     ckpt_num_queries=ckpt_num_queries,
                     ckpt_group_detr=ckpt_group_detr,
                     target_num_queries=mc.num_queries,
                     target_group_detr=mc.group_detr,
                 )
+                target_tensor = model_state.get(name)
+                if target_tensor is not None and query_tensor.shape != target_tensor.shape:
+                    expanded = _expand_query_param_per_group(
+                        query_tensor,
+                        target_tensor,
+                        ckpt_num_queries=ckpt_num_queries,
+                        ckpt_group_detr=ckpt_group_detr,
+                        target_num_queries=mc.num_queries,
+                        target_group_detr=mc.group_detr,
+                    )
+                    if expanded.shape == target_tensor.shape:
+                        logger.warning_once(
+                            "Expanding checkpoint query parameter %s from %s to %s; "
+                            "new query slots keep random initialization.",
+                            name,
+                            tuple(tensor.shape),
+                            tuple(target_tensor.shape),
+                        )
+                    query_tensor = expanded
+                checkpoint["model"][name] = query_tensor
             else:
                 # Legacy checkpoint with no num_queries/group_detr in args:
                 # preserve the original flat slice for backward compatibility.

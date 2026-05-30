@@ -32,6 +32,8 @@ from PIL import Image
 from rfdetr.assets.coco_classes import COCO_CLASS_NAMES, COCO_CLASSES
 from rfdetr.assets.model_weights import download_pretrain_weights, get_model_cache_dir
 from rfdetr.config import (
+    WHOLEBODY49_NUM_QUERIES,
+    WHOLEBODY49_NUM_SELECT,
     ModelConfig,
     TrainConfig,
 )
@@ -611,6 +613,7 @@ class RFDETR:
                     if hasattr(model_args, "positional_encoding_size"):
                         model_args.positional_encoding_size = new_pe
         config = self.get_train_config(**kwargs)
+        self._apply_deimv2_model_defaults(config)
         if config.batch_size == "auto":
             # Auto-batch probing runs forward/backward on the actual model, which
             # must be on the target device (typically CUDA).  Lazy placement keeps
@@ -1112,6 +1115,38 @@ class RFDETR:
             return len(cat_by_id)
 
         return len(RFDETR._load_classes(dataset_dir))
+
+    def _apply_deimv2_model_defaults(self, config: TrainConfig) -> None:
+        """Apply WholeBody49 model defaults for the DEIMv2 opt-in training path.
+
+        Args:
+            config: Resolved training configuration.
+        """
+        if config.dataset_file != "deimv2_coco" or config.augmentation_profile != "deimv2":
+            return
+
+        fields_set = getattr(self.model_config, "model_fields_set", set())
+        if "num_queries" in fields_set or "num_select" in fields_set:
+            return
+
+        if (
+            self.model_config.num_queries == WHOLEBODY49_NUM_QUERIES
+            and self.model_config.num_select == WHOLEBODY49_NUM_SELECT
+        ):
+            return
+
+        logger.info(
+            "Using WholeBody49 DEIMv2 query defaults: num_queries=%d num_select=%d.",
+            WHOLEBODY49_NUM_QUERIES,
+            WHOLEBODY49_NUM_SELECT,
+        )
+        self.model_config.num_queries = WHOLEBODY49_NUM_QUERIES
+        self.model_config.num_select = WHOLEBODY49_NUM_SELECT
+
+        # ``RFDETRModelModule`` builds its own training model from model_config,
+        # but auto-batch and post-training predict/export use this cached context.
+        if hasattr(self, "model") and self.model is not None:
+            self.model = self.get_model(self.model_config)
 
     def _align_num_classes_from_dataset(self, dataset_dir: str) -> None:
         """Auto-detect the dataset class count and align ``model_config.num_classes`` in-place.

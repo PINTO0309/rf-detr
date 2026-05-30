@@ -189,6 +189,10 @@ test_visualizations/
 # datasets
 data/
 datasets/
+!src/rfdetr/datasets/
+!src/rfdetr/datasets/*.py
+!tests/datasets/
+!tests/datasets/*.py
 
 debugging/
 
@@ -213,3 +217,4 @@ releases/
 tasks/
 
 DEIMv2/
+wholebody*/

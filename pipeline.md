@@ -20,6 +20,8 @@
 | `num_queries` / `num_select` | `300` / `300`                   |
 | pretrained weights           | `rf-detr-seg-xlarge.pt`         |
 
+`dataset_file="deimv2_coco"` かつ `augmentation_profile="deimv2"` の WholeBody49 学習では、ユーザーが `num_queries` / `num_select` を明示していない場合に `1240` / `1240` へ自動調整します。通常の COCO/Roboflow/YOLO 学習では上表の `300` / `300` のままです。
+
 学習パイプラインの大枠は次の流れです。
 
 ```text

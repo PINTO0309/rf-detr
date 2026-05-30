@@ -146,6 +146,10 @@ class SetCriterion(nn.Module):
         use_position_supervised_loss=False,
         ia_bce_loss=False,
         mask_point_sample_ratio: int = 16,
+        center_target_class_ids: list[int] | None = None,
+        center_distance_min_radius: float = 0.02,
+        center_bbox_wh_weight: float = 1.0,
+        center_giou_weight: float = 1.0,
     ):
         """Create the criterion.
 
@@ -169,6 +173,27 @@ class SetCriterion(nn.Module):
         self.use_position_supervised_loss = use_position_supervised_loss
         self.ia_bce_loss = ia_bce_loss
         self.mask_point_sample_ratio = mask_point_sample_ratio
+        self.center_target_class_ids = (
+            [] if center_target_class_ids is None else [int(v) for v in center_target_class_ids]
+        )
+        self.center_distance_min_radius = center_distance_min_radius
+        self.center_bbox_wh_weight = center_bbox_wh_weight
+        self.center_giou_weight = center_giou_weight
+
+    def _build_center_target_mask(self, labels: torch.Tensor) -> torch.Tensor:
+        """Return a mask for target classes trained with center-aware box loss."""
+        if not self.center_target_class_ids or labels.numel() == 0:
+            return torch.zeros_like(labels, dtype=torch.bool)
+        mask = torch.zeros_like(labels, dtype=torch.bool)
+        for class_id in self.center_target_class_ids:
+            mask |= labels == int(class_id)
+        return mask
+
+    def _normalized_center_distance(self, src_boxes: torch.Tensor, target_boxes: torch.Tensor) -> torch.Tensor:
+        """Normalize center distance by half the target box diagonal."""
+        center_distance = torch.norm(src_boxes[:, :2] - target_boxes[:, :2], dim=-1)
+        target_radius = torch.clamp(target_boxes[:, 2:].norm(dim=-1) * 0.5, min=self.center_distance_min_radius)
+        return center_distance / target_radius
 
     def loss_labels(self, outputs, targets, indices, num_boxes, log=True):
         """Classification loss (Binary focal loss) targets dicts must contain the key "labels" containing a tensor of
@@ -338,8 +363,13 @@ class SetCriterion(nn.Module):
         idx = self._get_src_permutation_idx(indices)
         src_boxes = outputs["pred_boxes"][idx]
         target_boxes = torch.cat([t["boxes"][i] for t, (_, i) in zip(targets, indices)], dim=0)
+        target_labels = torch.cat([t["labels"][i] for t, (_, i) in zip(targets, indices)], dim=0)
+        center_target_mask = self._build_center_target_mask(target_labels)
 
         loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction="none")
+        if center_target_mask.any():
+            loss_bbox[center_target_mask, :2] = 0.0
+            loss_bbox[center_target_mask, 2:] *= self.center_bbox_wh_weight
 
         losses = {}
         losses["loss_bbox"] = loss_bbox.sum() / num_boxes
@@ -350,7 +380,12 @@ class SetCriterion(nn.Module):
                 box_ops.box_cxcywh_to_xyxy(target_boxes),
             )
         )
+        if center_target_mask.any():
+            loss_giou[center_target_mask] *= self.center_giou_weight
         losses["loss_giou"] = loss_giou.sum() / num_boxes
+        if center_target_mask.any():
+            loss_center = self._normalized_center_distance(src_boxes, target_boxes)
+            losses["loss_center"] = loss_center[center_target_mask].sum() / num_boxes
         return losses
 
     def loss_masks(self, outputs, targets, indices, num_boxes):
@@ -406,6 +441,21 @@ class SetCriterion(nn.Module):
             }
         # gather matched target masks
         target_masks = torch.cat([t["masks"][j] for t, (_, j) in zip(targets, indices)], dim=0)  # [N, Ht, Wt]
+        target_mask_valid = torch.cat(
+            [
+                t.get("mask_valid", torch.ones(len(t["masks"]), dtype=torch.bool, device=t["masks"].device))[j]
+                for t, (_, j) in zip(targets, indices)
+            ],
+            dim=0,
+        ).to(torch.bool)
+        if target_mask_valid.numel() == 0 or not target_mask_valid.any():
+            return {
+                "loss_mask_ce": src_masks.sum() * 0,
+                "loss_mask_dice": src_masks.sum() * 0,
+            }
+        src_masks = src_masks[target_mask_valid]
+        target_masks = target_masks[target_mask_valid]
+        num_masks = max(float(target_mask_valid.sum().item()), 1.0)
 
         # No need to upsample predictions as we are using normalized coordinates :)
         # N x 1 x H x W
@@ -443,8 +493,8 @@ class SetCriterion(nn.Module):
             ).squeeze(1)
 
         losses = {
-            "loss_mask_ce": sigmoid_ce_loss_jit(point_logits, point_labels, num_boxes),
-            "loss_mask_dice": dice_loss_jit(point_logits, point_labels, num_boxes),
+            "loss_mask_ce": sigmoid_ce_loss_jit(point_logits, point_labels, num_masks),
+            "loss_mask_dice": dice_loss_jit(point_logits, point_labels, num_masks),
         }
 
         del src_masks

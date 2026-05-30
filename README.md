@@ -234,6 +234,138 @@ RF-DETR supports training for both object detection and instance segmentation. Y
 
 [![rf-detr-tutorial-banner](https://github.com/user-attachments/assets/555a45c3-96e8-4d8a-ad29-f23403c8edfd)](https://youtu.be/-OvpdLAElFA)
 
+For local RF-DETR-Seg-XL training on a memory-constrained NVIDIA GPU, start with a micro-batch size of 1 and use gradient accumulation to keep the effective batch size larger:
+
+```bash
+python - <<'PY'
+from rfdetr import RFDETRSegXLarge
+
+model = RFDETRSegXLarge(num_classes=49, gradient_checkpointing=True)
+model.train(
+    dataset_dir="wholebody49",
+    dataset_file="deimv2_coco",
+    augmentation_profile="deimv2",
+    output_dir="output",
+    epochs=100,
+    batch_size=1,
+    grad_accum_steps=16,
+    device="cuda",
+)
+PY
+```
+
+This example assumes the DEIMv2 WholeBody dataset has been placed directly under the RF-DETR repository as `wholebody49/`, with parquet annotations under `wholebody49/annotations/`. WholeBody-specific mask, segmentation evaluation, center-target, parquet preload, and `num_queries=num_select=1240` defaults are applied when `dataset_file="deimv2_coco"` and `augmentation_profile="deimv2"` are used; keep `num_classes=49` explicit so the detection head matches the copied WholeBody49 dataset.
+
+With `augmentation_profile="deimv2"`, RF-DETR uses the DEIMv2-compatible CPU transform pipeline for the `deimv2_coco` dataset. The default training sample pipeline is:
+
+- `RandomPhotometricDistort(p=0.5)` from epoch 4 through epoch 89.
+- `RandomZoomOut(p=0.5, side_range=[1.0, 1.5])` from epoch 4 through epoch 89.
+- `RandomIoUCrop(p=0.8)` from epoch 4 through epoch 89.
+- `SanitizeBoundingBoxes(min_size=1)` to remove invalid boxes while keeping labels, masks, `mask_valid`, and `segm_eval_valid` aligned.
+- `RandomHorizontalFlipWithClass(p=0.5)`, including WholeBody left/right class-id swaps from `class_flip_pairs`.
+- `Resize` to the model resolution, so `RFDETRSegXLarge` uses `624x624`.
+- A second `SanitizeBoundingBoxes(min_size=1)`.
+- `ConvertPILImage(dtype="float32", scale=True)`.
+- `Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])`.
+- `ConvertBoxes(fmt="cxcywh", normalize=True)`.
+
+Validation and test use only deterministic preprocessing: `Resize`, `ConvertPILImage`, `Normalize`, and `ConvertBoxes`.
+
+`ConvertPILImage`, `Normalize`, and `ConvertBoxes` are the compatibility boundary with RF-DETR's training loop. They produce float tensor images normalized with ImageNet statistics and convert target boxes to normalized `cxcywh`, which is the format expected by the matcher, box losses, COCO evaluation callback, and postprocessing utilities. Because the DEIMv2 profile already performs this CPU-side finalization, RF-DETR skips Kornia GPU augmentation for `augmentation_profile="deimv2"` even if `augmentation_backend="auto"` or `"gpu"` is requested.
+
+Mosaic, MixUp, and CopyBlend are available in the DEIMv2 profile but are disabled by default. Enable them explicitly with `mosaic_prob`, `mixup_prob`, or `copyblend_prob`:
+
+```python
+model.train(
+    dataset_dir="wholebody49",
+    dataset_file="deimv2_coco",
+    augmentation_profile="deimv2",
+    mosaic_prob=0.5,
+    mixup_prob=0.15,
+    copyblend_prob=0.15,
+    ...
+)
+```
+
+When `mosaic_prob > 0`, Mosaic is inserted before the photometric/crop transforms and runs only from epoch 4 through epoch 28. If Mosaic is selected for a sample, `RandomZoomOut` and `RandomIoUCrop` are skipped for that sample to avoid conflicting geometric policies. Collate-time MixUp runs from epoch 4 through epoch 28, and CopyBlend runs from epoch 4 through epoch 49. RF-DETR intentionally does not import DEIMv2's collate-time `base_size_repeat` multi-scale resize; the existing RF-DETR resize, padding, `multi_scale`, `square_resize_div_64`, and block-size collate behavior remain authoritative.
+
+To automatically resume and retry when CUDA runs out of memory, wrap the training command in a small shell script. The resume command points at the latest RF-DETR checkpoint in `output_dir`:
+
+```bash
+#!/usr/bin/env bash
+set -u
+
+export CUDA_VISIBLE_DEVICES=0
+export DATASET_DIR="wholebody49"
+export OUTPUT_DIR="output"
+export MAX_OOM_RETRIES=20
+
+run_and_log() {
+    local log_file="$1"
+    shift
+    "$@" 2>&1 | tee "$log_file"
+    return "${PIPESTATUS[0]}"
+}
+
+is_oom_log() {
+    grep -Eqi 'out of memory|OutOfMemoryError|CUDNN_STATUS_ALLOC_FAILED' "$1"
+}
+
+train_initial() {
+    python - <<PY
+from rfdetr import RFDETRSegXLarge
+
+model = RFDETRSegXLarge(num_classes=49, gradient_checkpointing=True)
+model.train(
+    dataset_dir="${DATASET_DIR}",
+    dataset_file="deimv2_coco",
+    augmentation_profile="deimv2",
+    output_dir="${OUTPUT_DIR}",
+    epochs=100,
+    batch_size=1,
+    grad_accum_steps=16,
+    device="cuda",
+)
+PY
+}
+
+train_resume() {
+    python - <<PY
+from rfdetr import RFDETRSegXLarge
+
+model = RFDETRSegXLarge(num_classes=49, gradient_checkpointing=True)
+model.train(
+    dataset_dir="${DATASET_DIR}",
+    dataset_file="deimv2_coco",
+    augmentation_profile="deimv2",
+    output_dir="${OUTPUT_DIR}",
+    epochs=100,
+    batch_size=1,
+    grad_accum_steps=16,
+    resume="${OUTPUT_DIR}/checkpoint.pth",
+    device="cuda",
+)
+PY
+}
+
+run_and_log train_initial.log train_initial
+status=$?
+
+if [ "$status" -ne 0 ] && is_oom_log train_initial.log; then
+    for attempt in $(seq 1 "$MAX_OOM_RETRIES"); do
+        log_file="train_resume_oom_retry_${attempt}.log"
+        echo "OOM detected. Resume attempt ${attempt}/${MAX_OOM_RETRIES}..."
+        run_and_log "$log_file" train_resume
+        status=$?
+
+        [ "$status" -eq 0 ] && break
+        is_oom_log "$log_file" || break
+    done
+fi
+
+echo "Training finished with status=$status"
+```
+
 ## Documentation
 
 Visit our [documentation website](https://rfdetr.roboflow.com) to learn more about how to use RF-DETR.

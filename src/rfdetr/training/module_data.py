@@ -157,9 +157,27 @@ class RFDETRDataModule(LightningDataModule):
                 f"{block_size} from patch_size={model_config.patch_size} "
                 f"and num_windows={model_config.num_windows}."
             )
-        self._collate_fn = make_collate_fn(
-            block_size=block_size,
-        )
+        if train_config.augmentation_profile == "deimv2":
+            from rfdetr.datasets.deimv2_transforms import make_deimv2_collate_fn
+
+            self._collate_fn = make_deimv2_collate_fn(
+                block_size=block_size,
+                mixup_prob=train_config.mixup_prob,
+                mixup_epochs=train_config.mixup_epochs,
+                copyblend_prob=train_config.copyblend_prob,
+                copyblend_epochs=train_config.copyblend_epochs,
+                copyblend_type=train_config.copyblend_type,
+                conflict_with_mixup=train_config.copyblend_conflict_with_mixup,
+                area_threshold=train_config.copyblend_area_threshold,
+                num_objects=train_config.copyblend_num_objects,
+                with_expand=train_config.copyblend_with_expand,
+                expand_ratios=train_config.copyblend_expand_ratios,
+                random_num_objects=train_config.copyblend_random_num_objects,
+            )
+        else:
+            self._collate_fn = make_collate_fn(
+                block_size=block_size,
+            )
 
         self._dataset_train: Optional[torch.utils.data.Dataset] = None
         self._dataset_val: Optional[torch.utils.data.Dataset] = None
@@ -243,6 +261,14 @@ class RFDETRDataModule(LightningDataModule):
         elif stage == "predict":
             if self._dataset_val is None:
                 self._dataset_val = build_dataset("val", ns, resolution)
+
+    def set_epoch(self, epoch: int) -> None:
+        """Propagate epoch to DEIMv2-style datasets and collate policies when present."""
+        for dataset in (self._dataset_train, self._dataset_val, self._dataset_test):
+            if hasattr(dataset, "set_epoch"):
+                dataset.set_epoch(epoch)
+        if hasattr(self._collate_fn, "set_epoch"):
+            self._collate_fn.set_epoch(epoch)
 
     def train_dataloader(self) -> DataLoader:
         """Return the training DataLoader.
@@ -363,6 +389,15 @@ class RFDETRDataModule(LightningDataModule):
         ``"auto"`` the method falls back silently when CUDA or Kornia are unavailable.  For ``"gpu"`` missing
         requirements raise hard errors.
         """
+        if self.train_config.augmentation_profile == "deimv2":
+            if self.train_config.augmentation_backend != "cpu":
+                logger.warning(
+                    "Ignoring augmentation_backend=%r because augmentation_profile='deimv2' "
+                    "already returns normalized images and normalized cxcywh boxes.",
+                    self.train_config.augmentation_backend,
+                )
+            return
+
         backend = self.train_config.augmentation_backend
         if backend == "cpu":
             return

@@ -55,12 +55,16 @@ class COCOEvalCallback(Callback):
         eval_interval: int = 1,
         log_per_class_metrics: bool = True,
         in_notebook: bool | None = None,
+        segm_eval_category_ids: list[int] | None = None,
+        segm_ignore_missing_masks: bool = True,
     ) -> None:
         super().__init__()
         self._max_dets = max_dets
         self._segmentation = segmentation
         self._eval_interval = max(1, int(eval_interval))
         self._log_per_class_metrics = bool(log_per_class_metrics)
+        self._segm_eval_category_ids = set(segm_eval_category_ids) if segm_eval_category_ids is not None else None
+        self._segm_ignore_missing_masks = segm_ignore_missing_masks
         self._class_names: list[str] = []
         self._cat_id_to_name: dict[int, str] = {}
         self._f1_local: dict[int, dict[str, Any]] = init_matching_accumulator()
@@ -721,6 +725,15 @@ class COCOEvalCallback(Callback):
             entry: dict[str, torch.Tensor] = {"boxes": boxes, "labels": t["labels"]}
             if "masks" in t:
                 masks = t["masks"].bool()
+                keep = torch.ones((len(entry["labels"]),), dtype=torch.bool, device=entry["labels"].device)
+                if self._segm_eval_category_ids is not None:
+                    keep &= torch.tensor(
+                        [int(label.item()) in self._segm_eval_category_ids for label in entry["labels"]],
+                        dtype=torch.bool,
+                        device=entry["labels"].device,
+                    )
+                if self._segm_ignore_missing_masks and "segm_eval_valid" in t:
+                    keep &= t["segm_eval_valid"].to(device=keep.device, dtype=torch.bool)
                 # PostProcess resizes predicted masks to orig_size; resize GT
                 # masks to match so that mask-IoU comparisons are size-consistent.
                 if masks.shape[-2:] != (int(h), int(w)):
@@ -733,8 +746,14 @@ class COCOEvalCallback(Callback):
                         .squeeze(1)
                         .bool()
                     )
+                if self._segmentation:
+                    entry["boxes"] = entry["boxes"][keep]
+                    entry["labels"] = entry["labels"][keep]
+                    masks = masks[keep]
+                    if "iscrowd" in t:
+                        entry["iscrowd"] = t["iscrowd"][keep]
                 entry["masks"] = masks
-            if "iscrowd" in t:
+            if "iscrowd" in t and "iscrowd" not in entry:
                 entry["iscrowd"] = t["iscrowd"]
             out.append(entry)
         return out

@@ -51,6 +51,35 @@ def _detect_device() -> str:
 
 DEVICE: str = _detect_device()
 
+WHOLEBODY49_MASK_TARGET_CLASS_IDS: list[int] = [0]
+WHOLEBODY49_SEGM_EVAL_CATEGORY_IDS: list[int] = [0]
+WHOLEBODY49_SEGM_IGNORE_MISSING_MASKS: bool = True
+WHOLEBODY49_NUM_QUERIES: int = 1240
+WHOLEBODY49_NUM_SELECT: int = 1240
+WHOLEBODY49_CENTER_TARGET_CLASS_IDS: list[int] = [
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+]
+
 
 class BaseConfig(BaseModel):
     """Base configuration class that validates input parameters against the defined model schema.
@@ -619,7 +648,7 @@ class TrainConfig(BaseModel):
     ia_bce_loss: bool = True
     cls_loss_coef: float = 1.0
     num_select: int = 300
-    dataset_file: Literal["coco", "o365", "roboflow", "yolo"] = "roboflow"
+    dataset_file: Literal["coco", "o365", "roboflow", "yolo", "deimv2_coco"] = "roboflow"
     square_resize_div_64: bool = True
     dataset_dir: str
     output_dir: str = "output"
@@ -649,6 +678,54 @@ class TrainConfig(BaseModel):
     log_per_class_metrics: bool = True
     aug_config: Optional[Dict[str, Any]] = None
     augmentation_backend: Literal["cpu", "auto", "gpu"] = "cpu"
+    augmentation_profile: Literal["rfdetr", "deimv2"] = "rfdetr"
+    preload_parquet: bool = True
+    mask_target_class_ids: Optional[List[int]] = None
+    segm_eval_category_ids: Optional[List[int]] = None
+    segm_ignore_missing_masks: bool = WHOLEBODY49_SEGM_IGNORE_MISSING_MASKS
+    mask_resize_origin: Literal["center", "topleft"] = "center"
+    deim_aug_config: Optional[List[Dict[str, Any]]] = None
+    deim_transform_policy_epochs: List[int] = Field(default_factory=lambda: [4, 29, 90])
+    deim_transform_policy_ops: List[str] = Field(
+        default_factory=lambda: ["RandomPhotometricDistort", "RandomZoomOut", "RandomIoUCrop"]
+    )
+    mosaic_prob: float = -0.1
+    mixup_prob: float = 0.0
+    mixup_epochs: List[int] = Field(default_factory=lambda: [4, 29])
+    copyblend_prob: float = 0.0
+    copyblend_epochs: List[int] = Field(default_factory=lambda: [4, 50])
+    copyblend_type: Literal["blend", "copy"] = "blend"
+    copyblend_conflict_with_mixup: bool = False
+    copyblend_area_threshold: float = 100.0
+    copyblend_num_objects: int = 3
+    copyblend_with_expand: bool = False
+    copyblend_expand_ratios: List[float] = Field(default_factory=lambda: [0.1, 0.25])
+    copyblend_random_num_objects: bool = False
+    center_target_class_ids: Optional[List[int]] = None
+    center_distance_min_radius: float = 0.02
+    center_bbox_wh_weight: float = 1.0
+    center_giou_weight: float = 1.0
+    center_local_weight: float = 1.0
+    center_loss_coef: float = 1.0
+    use_boundary_aware_loss: bool = False
+    use_contour_detection: bool = False
+    use_distance_transform: bool = False
+    distance_transform_steps: int = 5
+    class_flip_pairs: Optional[List[List[int]]] = Field(
+        default_factory=lambda: [
+            [9, 15],
+            [10, 14],
+            [11, 13],
+            [23, 24],
+            [27, 28],
+            [30, 31],
+            [33, 34],
+            [37, 38],
+            [40, 41],
+            [43, 44],
+            [46, 47],
+        ]
+    )
     save_dataset_grids: bool = False
     notes: Optional[Any] = Field(
         default=None,
@@ -660,6 +737,19 @@ class TrainConfig(BaseModel):
             "all other types are JSON-encoded."
         ),
     )
+
+    @model_validator(mode="after")
+    def _apply_deimv2_defaults(self) -> "TrainConfig":
+        """Apply WholeBody49 defaults only for the DEIMv2 parquet dataset path."""
+        if self.dataset_file != "deimv2_coco":
+            return self
+        if self.mask_target_class_ids is None:
+            self.mask_target_class_ids = list(WHOLEBODY49_MASK_TARGET_CLASS_IDS)
+        if self.segm_eval_category_ids is None:
+            self.segm_eval_category_ids = list(WHOLEBODY49_SEGM_EVAL_CATEGORY_IDS)
+        if self.center_target_class_ids is None:
+            self.center_target_class_ids = list(WHOLEBODY49_CENTER_TARGET_CLASS_IDS)
+        return self
 
     @model_validator(mode="after")
     def _warn_deprecated_train_config_fields(self) -> "TrainConfig":

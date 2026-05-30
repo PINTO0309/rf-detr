@@ -212,6 +212,8 @@ def build_trainer(
             segmentation=model_config.segmentation_head,
             eval_interval=tc.eval_interval,
             log_per_class_metrics=tc.log_per_class_metrics,
+            segm_eval_category_ids=tc.segm_eval_category_ids if tc.dataset_file == "deimv2_coco" else None,
+            segm_ignore_missing_masks=tc.segm_ignore_missing_masks,
         )
     )
 

@@ -50,6 +50,10 @@ class HungarianMatcher(nn.Module):
         mask_point_sample_ratio: int = 16,
         cost_mask_ce: float = 1,
         cost_mask_dice: float = 1,
+        center_target_class_ids: list[int] | None = None,
+        center_distance_min_radius: float = 0.02,
+        center_bbox_wh_weight: float = 1.0,
+        center_local_weight: float = 1.0,
     ):
         """Creates the matcher.
 
@@ -73,6 +77,12 @@ class HungarianMatcher(nn.Module):
         self.mask_point_sample_ratio = mask_point_sample_ratio
         self.cost_mask_ce = cost_mask_ce
         self.cost_mask_dice = cost_mask_dice
+        self.center_target_class_ids = (
+            [] if center_target_class_ids is None else [int(v) for v in center_target_class_ids]
+        )
+        self.center_distance_min_radius = center_distance_min_radius
+        self.center_bbox_wh_weight = center_bbox_wh_weight
+        self.center_local_weight = center_local_weight
         self._warned_non_finite_costs = False
 
     @staticmethod
@@ -166,11 +176,33 @@ class HungarianMatcher(nn.Module):
 
         # Compute the L1 cost between boxes
         cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1)
+        if self.center_target_class_ids:
+            center_target_mask = torch.zeros_like(tgt_ids, dtype=torch.bool)
+            for class_id in self.center_target_class_ids:
+                center_target_mask |= tgt_ids == int(class_id)
+            if center_target_mask.any():
+                bbox_l1 = (out_bbox[:, None, :] - tgt_bbox[None, :, :]).abs()
+                center_distance = torch.norm(out_bbox[:, None, :2] - tgt_bbox[None, :, :2], dim=-1)
+                target_radius = torch.clamp(
+                    tgt_bbox[None, :, 2:].norm(dim=-1) * 0.5,
+                    min=self.center_distance_min_radius,
+                )
+                center_cost = center_distance / target_radius
+                cost_bbox[:, center_target_mask] = (
+                    bbox_l1[:, center_target_mask, 2:].sum(-1) * self.center_bbox_wh_weight
+                    + center_cost[:, center_target_mask] * self.center_local_weight
+                )
 
         if masks_present:
             tgt_masks = torch.cat([v["masks"] for v in targets])
+            tgt_mask_valid = torch.cat(
+                [
+                    v.get("mask_valid", torch.ones(len(v["masks"]), dtype=torch.bool, device=v["masks"].device))
+                    for v in targets
+                ]
+            ).to(torch.bool)
 
-            if isinstance(outputs["pred_masks"], torch.Tensor):
+            if tgt_mask_valid.any() and isinstance(outputs["pred_masks"], torch.Tensor):
                 out_masks = outputs["pred_masks"].flatten(0, 1)
 
                 num_points = out_masks.shape[-2] * out_masks.shape[-1] // self.mask_point_sample_ratio
@@ -179,7 +211,7 @@ class HungarianMatcher(nn.Module):
                 pred_masks_logits = point_sample(
                     out_masks.unsqueeze(1), point_coords.repeat(out_masks.shape[0], 1, 1), align_corners=False
                 ).squeeze(1)
-            else:
+            elif tgt_mask_valid.any():
                 spatial_features = outputs["pred_masks"]["spatial_features"]
                 query_features = outputs["pred_masks"]["query_features"]
                 bias = outputs["pred_masks"]["bias"]
@@ -193,19 +225,25 @@ class HungarianMatcher(nn.Module):
                 pred_masks_logits = torch.einsum("bcp,bnc->bnp", pred_masks_logits, query_features) + bias
                 pred_masks_logits = pred_masks_logits.flatten(0, 1)
 
-            tgt_masks = tgt_masks.to(pred_masks_logits.dtype)
-            tgt_masks_flat = point_sample(
-                tgt_masks.unsqueeze(1),
-                point_coords.repeat(tgt_masks.shape[0], 1, 1),
-                align_corners=False,
-                mode="nearest",
-            ).squeeze(1)
+            if tgt_mask_valid.any():
+                tgt_masks = tgt_masks.to(pred_masks_logits.dtype)
+                tgt_masks_flat = point_sample(
+                    tgt_masks.unsqueeze(1),
+                    point_coords.repeat(tgt_masks.shape[0], 1, 1),
+                    align_corners=False,
+                    mode="nearest",
+                ).squeeze(1)
 
-            # Binary cross-entropy with logits cost (mean over pixels), computed pairwise efficiently
-            cost_mask_ce = batch_sigmoid_ce_loss(pred_masks_logits, tgt_masks_flat)
+                # Binary cross-entropy with logits cost (mean over pixels), computed pairwise efficiently
+                cost_mask_ce = batch_sigmoid_ce_loss(pred_masks_logits, tgt_masks_flat)
 
-            # Dice loss cost (1 - dice coefficient)
-            cost_mask_dice = batch_dice_loss(pred_masks_logits, tgt_masks_flat)
+                # Dice loss cost (1 - dice coefficient)
+                cost_mask_dice = batch_dice_loss(pred_masks_logits, tgt_masks_flat)
+                cost_mask_ce[:, ~tgt_mask_valid] = 0
+                cost_mask_dice[:, ~tgt_mask_valid] = 0
+            else:
+                cost_mask_ce = torch.zeros_like(cost_bbox)
+                cost_mask_dice = torch.zeros_like(cost_bbox)
 
         # Final cost matrix
         cost_matrix = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
@@ -258,6 +296,10 @@ def build_matcher(args):
             cost_mask_ce=args.mask_ce_loss_coef,
             cost_mask_dice=args.mask_dice_loss_coef,
             mask_point_sample_ratio=args.mask_point_sample_ratio,
+            center_target_class_ids=getattr(args, "center_target_class_ids", None),
+            center_distance_min_radius=getattr(args, "center_distance_min_radius", 0.02),
+            center_bbox_wh_weight=getattr(args, "center_bbox_wh_weight", 1.0),
+            center_local_weight=getattr(args, "center_local_weight", 1.0),
         )
     else:
         return HungarianMatcher(

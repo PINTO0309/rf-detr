@@ -467,6 +467,8 @@ def build_criterion_and_postprocessors(args: "BuilderArgs"):
     if args.segmentation_head:
         weight_dict["loss_mask_ce"] = args.mask_ce_loss_coef
         weight_dict["loss_mask_dice"] = args.mask_dice_loss_coef
+    if getattr(args, "center_target_class_ids", None):
+        weight_dict["loss_center"] = getattr(args, "center_loss_coef", 1.0)
     # TODO this is a hack
     if args.aux_loss:
         aux_weight_dict = {}
@@ -494,6 +496,10 @@ def build_criterion_and_postprocessors(args: "BuilderArgs"):
             use_position_supervised_loss=args.use_position_supervised_loss,
             ia_bce_loss=args.ia_bce_loss,
             mask_point_sample_ratio=args.mask_point_sample_ratio,
+            center_target_class_ids=getattr(args, "center_target_class_ids", None),
+            center_distance_min_radius=getattr(args, "center_distance_min_radius", 0.02),
+            center_bbox_wh_weight=getattr(args, "center_bbox_wh_weight", 1.0),
+            center_giou_weight=getattr(args, "center_giou_weight", 1.0),
         )
     else:
         criterion = SetCriterion(

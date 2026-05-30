@@ -97,6 +97,12 @@ class RFDETRModelModule(LightningModule):
         if self.train_config.seed is not None:
             seed_everything(self.train_config.seed + self.global_rank, workers=True)
 
+    def on_train_epoch_start(self) -> None:
+        """Propagate the current epoch to data policies that need epoch-aware scheduling."""
+        datamodule = getattr(self.trainer, "datamodule", None) if self.trainer is not None else None
+        if hasattr(datamodule, "set_epoch"):
+            datamodule.set_epoch(int(self.current_epoch))
+
     def on_train_batch_start(self, batch: Tuple, batch_idx: int) -> None:
         """Apply optional multi-scale resize to the incoming batch.
 

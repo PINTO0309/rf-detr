@@ -84,6 +84,23 @@ def _fake_nn_model() -> MagicMock:
     return model
 
 
+class _FakeQueryModel:
+    """Minimal model exposing query tensors for load_pretrain_weights tests."""
+
+    def __init__(self, num_queries: int, group_detr: int) -> None:
+        total_queries = num_queries * group_detr
+        self._state = {
+            "refpoint_embed.weight": torch.full((total_queries, 4), -1.0),
+            "query_feat.weight": torch.full((total_queries, 256), -1.0),
+        }
+        self.reinitialize_detection_head = MagicMock()
+        self.load_state_dict = MagicMock(return_value=SimpleNamespace(missing_keys=[], unexpected_keys=[]))
+
+    def state_dict(self) -> dict[str, torch.Tensor]:
+        """Return model-initialized query tensors."""
+        return self._state
+
+
 # ---------------------------------------------------------------------------
 # load_pretrain_weights — reinit scenarios
 # ---------------------------------------------------------------------------
@@ -760,6 +777,56 @@ class TestLoadPretrainWeightsPerGroupQuerySlice:
         expected = [0, 1, 2, 3, 100, 101, 102, 103]
         assert refpoint[:, 0].int().tolist() == expected
         assert query_feat[:, 0].int().tolist() == expected
+
+    def test_increasing_num_queries_preserves_prefix_and_keeps_extra_random(self, monkeypatch, tmp_path):
+        """Checkpoint(nq=4, g=3) → model(nq=8, g=3): prefixes load, added slots stay initialized."""
+        from rfdetr.models.weights import load_pretrain_weights
+
+        mc = RFDETRBaseConfig(
+            pretrain_weights="/fake/weights.pth",
+            device="cpu",
+            num_queries=8,
+            num_select=8,
+            group_detr=3,
+        )
+        checkpoint = self._make_args_dict_checkpoint(num_queries=4, group_detr=3)
+        monkeypatch.setattr("rfdetr.models.weights.torch.load", lambda *a, **kw: checkpoint)
+
+        nn_model = _FakeQueryModel(num_queries=8, group_detr=3)
+        load_pretrain_weights(nn_model, mc)
+
+        passed_state = nn_model.load_state_dict.call_args[0][0]
+        refpoint = passed_state["refpoint_embed.weight"]
+        query_feat = passed_state["query_feat.weight"]
+        assert refpoint.shape == (24, 4)
+        assert query_feat.shape == (24, 256)
+        assert refpoint[:, 0].int().tolist() == [
+            0,
+            1,
+            2,
+            3,
+            -1,
+            -1,
+            -1,
+            -1,
+            100,
+            101,
+            102,
+            103,
+            -1,
+            -1,
+            -1,
+            -1,
+            200,
+            201,
+            202,
+            203,
+            -1,
+            -1,
+            -1,
+            -1,
+        ]
+        assert query_feat[:, 0].int().tolist() == refpoint[:, 0].int().tolist()
 
     def test_decreasing_num_queries_namespace_args(self, monkeypatch, tmp_path):
         """Namespace-style args in checkpoint trigger per-group slice identical to dict-style."""
