@@ -192,6 +192,7 @@ class RFDETRDataModule(LightningDataModule):
         self._kornia_setup_done: bool = False
 
         self._num_workers: int = self.train_config.num_workers
+        self._pending_state_dict: dict[str, Any] | None = None
 
         # Use the fork-safe DEVICE constant instead of torch.cuda.is_available(),
         # which creates a CUDA driver context that breaks fork-based DDP.
@@ -261,6 +262,50 @@ class RFDETRDataModule(LightningDataModule):
         elif stage == "predict":
             if self._dataset_val is None:
                 self._dataset_val = build_dataset("val", ns, resolution)
+        self._apply_pending_state_dict()
+
+    def state_dict(self) -> dict[str, Any]:
+        """Return DataModule state for full checkpoint resume."""
+        state: dict[str, Any] = {}
+        for name, dataset in (
+            ("train_dataset", self._dataset_train),
+            ("val_dataset", self._dataset_val),
+            ("test_dataset", self._dataset_test),
+        ):
+            if dataset is not None and hasattr(dataset, "state_dict"):
+                state[name] = dataset.state_dict()
+        if hasattr(self._collate_fn, "state_dict"):
+            state["collate_fn"] = self._collate_fn.state_dict()
+        return state
+
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
+        """Restore DataModule state from a Lightning checkpoint."""
+        self._pending_state_dict = dict(state_dict)
+        self._apply_pending_state_dict()
+
+    def _apply_pending_state_dict(self) -> None:
+        """Apply deferred DataModule state once datasets have been built."""
+        if not self._pending_state_dict:
+            return
+
+        loaded_any = False
+        for name, dataset in (
+            ("train_dataset", self._dataset_train),
+            ("val_dataset", self._dataset_val),
+            ("test_dataset", self._dataset_test),
+        ):
+            dataset_state = self._pending_state_dict.get(name)
+            if dataset_state is not None and dataset is not None and hasattr(dataset, "load_state_dict"):
+                dataset.load_state_dict(dataset_state)
+                loaded_any = True
+
+        collate_state = self._pending_state_dict.get("collate_fn")
+        if collate_state is not None and hasattr(self._collate_fn, "load_state_dict"):
+            self._collate_fn.load_state_dict(collate_state)
+            loaded_any = True
+
+        if loaded_any:
+            self._pending_state_dict = None
 
     def set_epoch(self, epoch: int) -> None:
         """Propagate epoch to DEIMv2-style datasets and collate policies when present."""

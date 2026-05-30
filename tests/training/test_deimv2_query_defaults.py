@@ -52,3 +52,20 @@ def test_deimv2_profile_preserves_explicit_query_override() -> None:
     assert model.model_config.num_queries == 512
     assert model.model_config.num_select == 512
     model.get_model.assert_not_called()
+
+
+def test_resume_path_falls_back_to_latest_lightning_checkpoint(tmp_path) -> None:
+    """Legacy checkpoint.pth resume paths fall back to last.ckpt when available."""
+    last_checkpoint = tmp_path / "last.ckpt"
+    last_checkpoint.write_bytes(b"checkpoint")
+    model = object.__new__(RFDETR)
+    train_config = TrainConfig(
+        dataset_dir="wholebody49",
+        dataset_file="deimv2_coco",
+        augmentation_profile="deimv2",
+        resume=str(tmp_path / "checkpoint.pth"),
+    )
+
+    model._resolve_resume_path(train_config)
+
+    assert train_config.resume == str(last_checkpoint)

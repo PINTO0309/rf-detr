@@ -490,9 +490,9 @@ def load_pretrain_weights(
     if mc.group_detr > 1 and (ckpt_num_queries is None or ckpt_group_detr is None):
         logger.warning(
             "load_pretrain_weights: checkpoint lacks args.num_queries / "
-            "args.group_detr; falling back to flat slice. With "
-            "group_detr=%d this may scramble per-group query structure if "
-            "the checkpoint was trained with group_detr > 1.",
+            "args.group_detr; using tensor-shape inference for query expansion when possible, "
+            "otherwise falling back to flat slice. With group_detr=%d, flat slicing may scramble "
+            "per-group query structure if the checkpoint was trained with group_detr > 1.",
             mc.group_detr,
         )
     model_state_raw = nn_model.state_dict()
@@ -530,11 +530,48 @@ def load_pretrain_weights(
                 checkpoint["model"][name] = query_tensor
             else:
                 # Legacy checkpoint with no num_queries/group_detr in args:
-                # preserve the original flat slice for backward compatibility.
+                # preserve the original flat slice for backward compatibility
+                # unless the target model expands query slots, where a flat
+                # smaller tensor would fail load_state_dict with a shape mismatch.
                 # NOTE: the flat slice is incorrect for group_detr > 1 — it scrambles
                 # groups 1+ when num_queries decreases. Legacy checkpoints predate
                 # multi-group training, so in practice they are all group_detr == 1.
-                checkpoint["model"][name] = tensor[: mc.num_queries * mc.group_detr]
+                query_tensor = tensor[: mc.num_queries * mc.group_detr]
+                target_tensor = model_state.get(name)
+                if (
+                    target_tensor is not None
+                    and query_tensor.shape != target_tensor.shape
+                    and tensor.shape[0] < target_tensor.shape[0]
+                    and mc.group_detr > 0
+                    and tensor.shape[0] % mc.group_detr == 0
+                ):
+                    inferred_ckpt_num_queries = tensor.shape[0] // mc.group_detr
+                    query_tensor = _slice_query_param_per_group(
+                        tensor,
+                        ckpt_num_queries=inferred_ckpt_num_queries,
+                        ckpt_group_detr=mc.group_detr,
+                        target_num_queries=mc.num_queries,
+                        target_group_detr=mc.group_detr,
+                    )
+                    expanded = _expand_query_param_per_group(
+                        query_tensor,
+                        target_tensor,
+                        ckpt_num_queries=inferred_ckpt_num_queries,
+                        ckpt_group_detr=mc.group_detr,
+                        target_num_queries=mc.num_queries,
+                        target_group_detr=mc.group_detr,
+                    )
+                    if expanded.shape == target_tensor.shape:
+                        logger.warning_once(
+                            "Expanding legacy checkpoint query parameter %s from %s to %s; "
+                            "inferred ckpt_num_queries=%d and new query slots keep random initialization.",
+                            name,
+                            tuple(tensor.shape),
+                            tuple(target_tensor.shape),
+                            inferred_ckpt_num_queries,
+                        )
+                    query_tensor = expanded
+                checkpoint["model"][name] = query_tensor
 
     interpolate_position_embeddings(checkpoint["model"], mc.positional_encoding_size)
     incompatible = nn_model.load_state_dict(checkpoint["model"], strict=False)

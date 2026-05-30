@@ -189,6 +189,24 @@ class Deimv2CocoDetection(torch.utils.data.Dataset[tuple[Any, dict[str, Any]]]):
         if self._transforms is not None and hasattr(self._transforms, "set_epoch"):
             self._transforms.set_epoch(epoch)
 
+    def state_dict(self) -> dict[str, Any]:
+        """Return dataset transform state for checkpoint resume."""
+        state: dict[str, Any] = {"epoch": self._epoch}
+        if self._transforms is not None and hasattr(self._transforms, "state_dict"):
+            state["transforms"] = self._transforms.state_dict()
+        return state
+
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
+        """Restore dataset transform state from checkpoint."""
+        self.set_epoch(int(state_dict.get("epoch", self._epoch)))
+        transform_state = state_dict.get("transforms")
+        if (
+            transform_state is not None
+            and self._transforms is not None
+            and hasattr(self._transforms, "load_state_dict")
+        ):
+            self._transforms.load_state_dict(transform_state)
+
     def load_item(self, idx: int) -> tuple[Image.Image, dict[str, Any]]:
         """Load and convert a sample before online transforms."""
         image, row = self.store.read_item(idx)

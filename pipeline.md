@@ -43,8 +43,11 @@ RFDETRSegXLarge
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
+pip install --force-reinstall "numpy==1.26.4" "pyarrow==14.0.1"
 pip install -e ".[train,loggers,kornia]"
 ```
+
+`pyarrow==14.0.1` は NumPy 2.x と ABI 互換でない wheel を読むことがあるため、学習環境では `numpy==1.26.4` に固定します。`AttributeError: _ARRAY_API not found` や `A module that was compiled using NumPy 1.x cannot be run in NumPy 2.x` が出た場合も、上記の強制再インストールで NumPy 1.x へ戻してください。
 
 CUDA が見えていることを確認します。
 
@@ -415,14 +418,14 @@ tensorboard --logdir output/seg-xlarge
 
 主な出力は以下です。
 
-| ファイル                               | 用途                                              |
-| -------------------------------------- | ------------------------------------------------- |
-| `checkpoint.pth` または `last.ckpt` 系 | 最新状態から学習を再開するための checkpoint       |
-| `checkpoint_<N>.pth`                   | `checkpoint_interval` ごとの保存                  |
-| `checkpoint_best_ema.pth`              | EMA weight で validation が最良だった checkpoint  |
-| `checkpoint_best_regular.pth`          | 通常 weight で validation が最良だった checkpoint |
-| `checkpoint_best_total.pth`            | 推論・export に使う最終ベスト checkpoint          |
-| `training_config.json`                 | 実行時の train/model config と class names        |
+| ファイル                      | 用途                                                    |
+| ----------------------------- | ------------------------------------------------------- |
+| `last.ckpt`                   | optimizer / scheduler / epoch を含む最新再開 checkpoint |
+| `checkpoint_<N>.pth`          | `checkpoint_interval` ごとの保存                        |
+| `checkpoint_best_ema.pth`     | EMA weight で validation が最良だった checkpoint        |
+| `checkpoint_best_regular.pth` | 通常 weight で validation が最良だった checkpoint       |
+| `checkpoint_best_total.pth`   | 推論・export に使う最終ベスト checkpoint                |
+| `training_config.json`        | 実行時の train/model config と class names              |
 
 監視で特に見る metric は以下です。
 
@@ -493,7 +496,7 @@ model = RFDETRSegXLarge(gradient_checkpointing=True)
 model.train(
     dataset_dir="dataset",
     output_dir="output/seg-xlarge",
-    resume="output/seg-xlarge/checkpoint.pth",
+    resume="output/seg-xlarge/last.ckpt",
     batch_size="auto",
     auto_batch_target_effective=16,
     device="cuda",
@@ -515,7 +518,7 @@ print(detections)
 
 使い分けは以下です。
 
-- `resume="output/checkpoint.pth"`: 同じ学習 run を途中から再開する。optimizer state と epoch も復元する。
+- `resume="output/last.ckpt"`: 同じ学習 run を途中から再開する。optimizer state、scheduler state、epoch、Lightning callback/DataModule state も復元する。
 - `pretrain_weights="output/checkpoint_best_total.pth"`: weight だけを読み、推論または新しい fine-tuning run の初期値にする。
 
 ## トラブルシュート

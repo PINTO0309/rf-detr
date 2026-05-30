@@ -828,6 +828,57 @@ class TestLoadPretrainWeightsPerGroupQuerySlice:
         ]
         assert query_feat[:, 0].int().tolist() == refpoint[:, 0].int().tolist()
 
+    def test_legacy_increasing_num_queries_infers_group_prefixes(self, monkeypatch, tmp_path):
+        """Legacy checkpoint with no args can still expand query tensors from tensor rows."""
+        from rfdetr.models.weights import load_pretrain_weights
+
+        mc = RFDETRBaseConfig(
+            pretrain_weights="/fake/weights.pth",
+            device="cpu",
+            num_queries=8,
+            num_select=8,
+            group_detr=3,
+        )
+        checkpoint = self._make_args_dict_checkpoint(num_queries=4, group_detr=3)
+        del checkpoint["args"]
+        monkeypatch.setattr("rfdetr.models.weights.torch.load", lambda *a, **kw: checkpoint)
+
+        nn_model = _FakeQueryModel(num_queries=8, group_detr=3)
+        load_pretrain_weights(nn_model, mc)
+
+        passed_state = nn_model.load_state_dict.call_args[0][0]
+        refpoint = passed_state["refpoint_embed.weight"]
+        query_feat = passed_state["query_feat.weight"]
+        assert refpoint.shape == (24, 4)
+        assert query_feat.shape == (24, 256)
+        assert refpoint[:, 0].int().tolist() == [
+            0,
+            1,
+            2,
+            3,
+            -1,
+            -1,
+            -1,
+            -1,
+            100,
+            101,
+            102,
+            103,
+            -1,
+            -1,
+            -1,
+            -1,
+            200,
+            201,
+            202,
+            203,
+            -1,
+            -1,
+            -1,
+            -1,
+        ]
+        assert query_feat[:, 0].int().tolist() == refpoint[:, 0].int().tolist()
+
     def test_decreasing_num_queries_namespace_args(self, monkeypatch, tmp_path):
         """Namespace-style args in checkpoint trigger per-group slice identical to dict-style."""
         from rfdetr.models.weights import load_pretrain_weights

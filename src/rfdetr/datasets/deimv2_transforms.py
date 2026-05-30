@@ -664,6 +664,14 @@ class Deimv2CollateFunction:
         """Set the current epoch."""
         self._epoch = int(epoch)
 
+    def state_dict(self) -> dict[str, Any]:
+        """Return collate augmentation state for checkpoint resume."""
+        return {"epoch": self._epoch}
+
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
+        """Restore collate augmentation state from checkpoint."""
+        self._epoch = int(state_dict.get("epoch", -1))
+
     @property
     def epoch(self) -> int:
         """Return the current epoch."""

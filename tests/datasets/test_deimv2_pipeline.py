@@ -140,3 +140,14 @@ def test_deimv2_collate_mixup_keeps_masks_aligned() -> None:
     assert targets[0]["boxes"].shape[0] == 2
     assert targets[0]["masks"].shape[0] == 2
     assert targets[0]["mask_valid"].tolist() == [True, True]
+
+
+def test_deimv2_collate_state_restores_epoch() -> None:
+    """Collate augmentation epoch survives checkpoint resume."""
+    collate = Deimv2CollateFunction(block_size=4, mixup_prob=1.0, mixup_epochs=[0, 2])
+    collate.set_epoch(7)
+    restored = Deimv2CollateFunction(block_size=4, mixup_prob=1.0, mixup_epochs=[0, 2])
+
+    restored.load_state_dict(collate.state_dict())
+
+    assert restored.epoch == 7

@@ -37,6 +37,7 @@ dependencies = [
     "torchvision==0.25.0",             # image transforms and ops (aligned with torch==2.10.0)
     "tqdm==4.67.1",                    # progress bars during weight download; pinned to match onnx2tf 2.4.0
     "transformers==5.9.0",             # DINOv2 backbone loading
+    "numpy==1.26.4",                   # Keep NumPy 1.x ABI for pyarrow/pandas/sklearn wheels used in training
     "pydantic==2.13.4",                # ModelConfig / TrainConfig validation
     "supervision==0.28.0",             # inference output (Detections, Masks)
     "pyDeprecate==0.7.0",              # deprecation warnings for legacy APIs; >=0.6 for deprecated_class
@@ -114,7 +115,7 @@ tests = [
 
 typing = [
     "mypy==2.1.0",
-    "numpy==2.3.5",
+    "numpy==1.26.4",
     "types-PyYAML==6.0.12.20260518",
     "types-requests==2.33.0.20260518",
     "types-tqdm==4.67.3.20260518",

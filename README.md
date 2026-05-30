@@ -236,6 +236,18 @@ RF-DETR supports training for both object detection and instance segmentation. Y
 
 For local RF-DETR-Seg-XL training on a memory-constrained NVIDIA GPU, start with a micro-batch size of 1 and use gradient accumulation to keep the effective batch size larger:
 
+Install this local checkout in editable mode before running the example. The `deimv2_coco` dataset path is available in this repository version, not in an older `rfdetr` package that may already be installed in `site-packages`.
+
+```bash
+python -m pip install --force-reinstall "numpy==1.26.4" "pyarrow==14.0.1"
+python -m pip install -e ".[train,loggers,kornia]"
+python - <<'PY'
+import rfdetr
+
+print(rfdetr.__file__)
+PY
+```
+
 ```bash
 python - <<'PY'
 from rfdetr import RFDETRSegXLarge
@@ -289,7 +301,7 @@ model.train(
 
 When `mosaic_prob > 0`, Mosaic is inserted before the photometric/crop transforms and runs only from epoch 4 through epoch 28. If Mosaic is selected for a sample, `RandomZoomOut` and `RandomIoUCrop` are skipped for that sample to avoid conflicting geometric policies. Collate-time MixUp runs from epoch 4 through epoch 28, and CopyBlend runs from epoch 4 through epoch 49. RF-DETR intentionally does not import DEIMv2's collate-time `base_size_repeat` multi-scale resize; the existing RF-DETR resize, padding, `multi_scale`, `square_resize_div_64`, and block-size collate behavior remain authoritative.
 
-To automatically resume and retry when CUDA runs out of memory, wrap the training command in a small shell script. The resume command points at the latest RF-DETR checkpoint in `output_dir`:
+To automatically resume and retry when CUDA runs out of memory, wrap the training command in a small shell script. The resume command points at the latest full Lightning checkpoint in `output_dir`:
 
 ```bash
 #!/usr/bin/env bash
@@ -330,6 +342,12 @@ PY
 }
 
 train_resume() {
+    if [ ! -f "${OUTPUT_DIR}/last.ckpt" ]; then
+        echo "No ${OUTPUT_DIR}/last.ckpt found; rerunning the initial command."
+        train_initial
+        return $?
+    fi
+
     python - <<PY
 from rfdetr import RFDETRSegXLarge
 
@@ -342,7 +360,7 @@ model.train(
     epochs=100,
     batch_size=1,
     grad_accum_steps=16,
-    resume="${OUTPUT_DIR}/checkpoint.pth",
+    resume="${OUTPUT_DIR}/last.ckpt",
     device="cuda",
 )
 PY

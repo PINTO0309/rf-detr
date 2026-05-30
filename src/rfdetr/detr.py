@@ -666,6 +666,7 @@ class RFDETR:
         if _devices is not None:
             trainer_kwargs["devices"] = _devices
         trainer = build_trainer(config, self.model_config, **trainer_kwargs)
+        self._resolve_resume_path(config)
         trainer.fit(module, datamodule, ckpt_path=config.resume or None)
 
         # Sync the trained weights back so predict() / export() see the updated model.
@@ -1147,6 +1148,24 @@ class RFDETR:
         # but auto-batch and post-training predict/export use this cached context.
         if hasattr(self, "model") and self.model is not None:
             self.model = self.get_model(self.model_config)
+
+    def _resolve_resume_path(self, config: TrainConfig) -> None:
+        """Resolve legacy resume paths to the current Lightning checkpoint name."""
+        if not config.resume:
+            return
+
+        resume_path = Path(config.resume)
+        if resume_path.exists() or resume_path.name != "checkpoint.pth":
+            return
+
+        latest_checkpoint = resume_path.with_name("last.ckpt")
+        if latest_checkpoint.exists():
+            logger.warning(
+                "resume=%s was not found; using latest Lightning checkpoint %s instead.",
+                resume_path,
+                latest_checkpoint,
+            )
+            config.resume = str(latest_checkpoint)
 
     def _align_num_classes_from_dataset(self, dataset_dir: str) -> None:
         """Auto-detect the dataset class count and align ``model_config.num_classes`` in-place.
