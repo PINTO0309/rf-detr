@@ -339,11 +339,12 @@ model.train(
     epochs=100,
     batch_size=1,
     grad_accum_steps=16,
-    resolution=600,
+    resolution=576,
     multi_scale=True,
     expanded_scales=True,
     multi_scale_max_offset=0,
     device="cuda",
+    progress_bar="tqdm",
 )
 PY
 }
@@ -367,12 +368,13 @@ model.train(
     epochs=100,
     batch_size=1,
     grad_accum_steps=16,
-    resolution=600,
+    resolution=576,
     multi_scale=True,
     expanded_scales=True,
     multi_scale_max_offset=0,
     resume="${OUTPUT_DIR}/last.ckpt",
     device="cuda",
+    progress_bar="tqdm",
 )
 PY
 }
