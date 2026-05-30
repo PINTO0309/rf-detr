@@ -20,7 +20,7 @@ https://github.com/user-attachments/assets/add23fd1-266f-4538-8809-d7dd5767e8e6
 
 ## Install
 
-To install RF-DETR, install the `rfdetr` package in a [**Python>=3.10**](https://www.python.org/) environment with `pip`.
+To install RF-DETR, install the `rfdetr` package in a [**Python 3.12**](https://www.python.org/) environment with `pip`.
 
 ```bash
 pip install rfdetr

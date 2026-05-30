@@ -8,7 +8,7 @@
 RF-DETR is a real-time transformer architecture for object detection and instance segmentation. Built on DINOv2 vision transformer backbone with PyTorch.
 
 **Project Type:** Python ML library (computer vision)
-**Python:** >=3.10 (3.10, 3.11, 3.12, 3.13)
+**Python:** 3.12
 **License:** Apache 2.0 (Plus models under PML 1.0)
 
 > [!TIP]
@@ -72,7 +72,7 @@ pre-commit run --all-files
 - ✅ Before PR: Final commit MUST have all tests passing
 - ✅ Before commit: Run `pre-commit run --all-files`
 
-**CI/CD:** See `.github/workflows/` for source of truth. Tests run on Python 3.10-3.13 across Ubuntu, Windows, macOS.
+**CI/CD:** See `.github/workflows/` for source of truth. Tests run on Python 3.12 across Ubuntu, Windows, macOS.
 
 ## Coding Standards
 

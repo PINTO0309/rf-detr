@@ -62,7 +62,7 @@ pip install uv
 uv sync --all-groups
 ```
 
-**Prerequisites:** Python >=3.10 (tested on 3.10-3.13)
+**Prerequisites:** Python 3.12
 
 ### Dependency Information
 
