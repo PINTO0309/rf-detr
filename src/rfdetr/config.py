@@ -654,6 +654,8 @@ class TrainConfig(BaseModel):
     output_dir: str = "output"
     multi_scale: bool = True
     expanded_scales: bool = True
+    multi_scale_min_offset: Optional[int] = None
+    multi_scale_max_offset: Optional[int] = None
     do_random_resize_via_padding: bool = False
     use_ema: bool = True
     ema_update_interval: int = 1
@@ -749,6 +751,20 @@ class TrainConfig(BaseModel):
             self.segm_eval_category_ids = list(WHOLEBODY49_SEGM_EVAL_CATEGORY_IDS)
         if self.center_target_class_ids is None:
             self.center_target_class_ids = list(WHOLEBODY49_CENTER_TARGET_CLASS_IDS)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_multi_scale_offsets(self) -> "TrainConfig":
+        """Validate optional multi-scale offset bounds."""
+        if (
+            self.multi_scale_min_offset is not None
+            and self.multi_scale_max_offset is not None
+            and self.multi_scale_min_offset > self.multi_scale_max_offset
+        ):
+            raise ValueError(
+                "multi_scale_min_offset must be <= multi_scale_max_offset, got "
+                f"{self.multi_scale_min_offset} > {self.multi_scale_max_offset}"
+            )
         return self
 
     @model_validator(mode="after")

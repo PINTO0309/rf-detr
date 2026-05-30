@@ -323,11 +323,15 @@ def resolve_auto_batch_config(
         expanded_scales = getattr(train_config, "expanded_scales", True)
         patch_size = getattr(model_config, "patch_size", 14)
         num_windows = getattr(model_config, "num_windows", 4)
+        multi_scale_min_offset = getattr(train_config, "multi_scale_min_offset", None)
+        multi_scale_max_offset = getattr(train_config, "multi_scale_max_offset", None)
         scales = compute_multi_scale_scales(
             model_config.resolution,
             expanded_scales,
             patch_size,
             num_windows,
+            min_offset=multi_scale_min_offset,
+            max_offset=multi_scale_max_offset,
         )
         probe_resolution = max(scales) if scales else model_config.resolution
     else:

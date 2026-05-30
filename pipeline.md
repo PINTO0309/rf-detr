@@ -205,6 +205,8 @@ model.train(
 | `augmentation_backend`         | `"cpu"`                          | Albumentations 系 transform を dataset 側で実行する        |
 | `multi_scale`                  | `True`                           | 学習 batch 開始時にもランダム resize を行う                |
 | `expanded_scales`              | `True`                           | 解像度候補を広めに取る                                     |
+| `multi_scale_min_offset`       | `None`                           | multi-scale 候補の下限 offset を任意に制限する             |
+| `multi_scale_max_offset`       | `None`                           | multi-scale 候補の上限 offset を任意に制限する             |
 | `square_resize_div_64`         | `True`                           | train/valid/test を正方形 resize 系 pipeline にする        |
 | `do_random_resize_via_padding` | `False`                          | dataset 側は最大 scale 固定、batch 側で multi-scale する   |
 
@@ -214,6 +216,12 @@ model.train(
 
 ```text
 504, 528, 552, 576, 600, 624, 648, 672, 696, 720, 744
+```
+
+`resolution=624` のまま拡大方向だけを `648` までに抑える場合は `multi_scale_max_offset=1` を指定します。`expanded_scales=False` と組み合わせると候補は次になります。
+
+```text
+552, 576, 600, 624, 648
 ```
 
 COCO / Roboflow segmentation の train split では、dataset の `__getitem__` 時におおむね次の順で処理されます。
@@ -534,13 +542,15 @@ model.train(
     output_dir="output/seg-xlarge",
     batch_size=1,
     grad_accum_steps=16,
-    multi_scale=False,
+    multi_scale=True,
+    expanded_scales=False,
+    multi_scale_max_offset=1,
     use_ema=False,
     device="cuda",
 )
 ```
 
-`multi_scale=False` は最大解像度側のメモリ増加を避けます。`use_ema=False` は EMA copy 分のメモリを減らしますが、最終精度が変わる可能性があります。
+`multi_scale_max_offset=1` は `resolution=624` のまま multi-scale の最大候補を `648x648` に抑えます。さらに厳しい場合は `multi_scale=False` で batch 側 multi-scale resize 自体を止めます。`use_ema=False` は EMA copy 分のメモリを減らしますが、最終精度が変わる可能性があります。
 
 ### `segmentation` 欠落
 

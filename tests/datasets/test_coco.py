@@ -19,7 +19,7 @@ import pytest
 import torch
 from PIL import Image
 
-from rfdetr.datasets.coco import ConvertCoco
+from rfdetr.datasets.coco import ConvertCoco, compute_multi_scale_scales
 from rfdetr.detr import RFDETR
 
 # Minimal image shared across all tests
@@ -33,6 +33,32 @@ _ANNOTATIONS = [
     {"bbox": [10, 10, 30, 30], "category_id": 1, "area": 900, "iscrowd": 0},
     {"bbox": [50, 50, 20, 20], "category_id": 7, "area": 400, "iscrowd": 0},
 ]
+
+
+def test_compute_multi_scale_scales_can_cap_upper_offset() -> None:
+    """RFDETRSegXLarge can keep resolution=624 while capping expansion at 648."""
+    scales = compute_multi_scale_scales(
+        resolution=624,
+        expanded_scales=False,
+        patch_size=12,
+        num_windows=2,
+        max_offset=1,
+    )
+
+    assert scales == [552, 576, 600, 624, 648]
+
+
+def test_compute_multi_scale_scales_default_upper_bound_is_unchanged() -> None:
+    """Existing expanded multi-scale defaults remain backward compatible."""
+    scales = compute_multi_scale_scales(
+        resolution=624,
+        expanded_scales=True,
+        patch_size=12,
+        num_windows=2,
+    )
+
+    assert scales[-1] == 744
+
 
 _CAT2LABEL = {cat_id: i for i, cat_id in enumerate(sorted(_SPARSE_CAT_IDS))}
 # {1: 0, 2: 1, 3: 2, 7: 3, 8: 4}

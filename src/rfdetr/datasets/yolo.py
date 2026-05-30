@@ -690,6 +690,8 @@ def build_roboflow_from_yolo(image_set: str, args: Any, resolution: int) -> Yolo
     do_random_resize_via_padding = getattr(args, "do_random_resize_via_padding", False)
     patch_size = getattr(args, "patch_size", None)
     num_windows = getattr(args, "num_windows", None)
+    multi_scale_min_offset = getattr(args, "multi_scale_min_offset", None)
+    multi_scale_max_offset = getattr(args, "multi_scale_max_offset", None)
     aug_config = getattr(args, "aug_config", None)
     resolved_augmentation_backend = _resolve_runtime_augmentation_backend(getattr(args, "augmentation_backend", "cpu"))
     gpu_postprocess = resolved_augmentation_backend != "cpu"
@@ -707,6 +709,8 @@ def build_roboflow_from_yolo(image_set: str, args: Any, resolution: int) -> Yolo
                 skip_random_resize=not do_random_resize_via_padding,
                 patch_size=patch_size,
                 num_windows=num_windows,
+                multi_scale_min_offset=multi_scale_min_offset,
+                multi_scale_max_offset=multi_scale_max_offset,
                 aug_config=aug_config,
                 gpu_postprocess=gpu_postprocess,
             ),
@@ -725,6 +729,8 @@ def build_roboflow_from_yolo(image_set: str, args: Any, resolution: int) -> Yolo
                 skip_random_resize=not do_random_resize_via_padding,
                 patch_size=patch_size,
                 num_windows=num_windows,
+                multi_scale_min_offset=multi_scale_min_offset,
+                multi_scale_max_offset=multi_scale_max_offset,
                 aug_config=aug_config,
                 gpu_postprocess=gpu_postprocess,
             ),

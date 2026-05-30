@@ -78,11 +78,19 @@ class TestNamespaceFromConfigs:
 
     def test_forwards_dataset_fields(self, base_model_config, base_train_config):
         """Dataset-routing fields are forwarded to the Namespace."""
-        tc = base_train_config(multi_scale=True, expanded_scales=True, dataset_file="coco")
+        tc = base_train_config(
+            multi_scale=True,
+            expanded_scales=True,
+            multi_scale_min_offset=-2,
+            multi_scale_max_offset=1,
+            dataset_file="coco",
+        )
         args = _namespace_from_configs(base_model_config(), tc)
 
         assert args.multi_scale is True
         assert args.expanded_scales is True
+        assert args.multi_scale_min_offset == -2
+        assert args.multi_scale_max_offset == 1
         assert args.dataset_file == "coco"
 
     def test_num_queries_from_subclass_config(self, base_model_config, base_train_config):

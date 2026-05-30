@@ -118,7 +118,14 @@ class RFDETRModelModule(LightningModule):
 
         if tc.multi_scale and not tc.do_random_resize_via_padding:
             samples, _ = batch
-            scales = compute_multi_scale_scales(mc.resolution, tc.expanded_scales, mc.patch_size, mc.num_windows)
+            scales = compute_multi_scale_scales(
+                mc.resolution,
+                tc.expanded_scales,
+                mc.patch_size,
+                mc.num_windows,
+                min_offset=tc.multi_scale_min_offset,
+                max_offset=tc.multi_scale_max_offset,
+            )
             step = self.trainer.global_step
             random.seed(step)
             scale = random.choice(scales)

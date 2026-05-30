@@ -42,15 +42,26 @@ def compute_multi_scale_scales(
     expanded_scales: bool = False,
     patch_size: int = 16,
     num_windows: int = 4,
+    min_offset: Optional[int] = None,
+    max_offset: Optional[int] = None,
 ) -> List[int]:
     # round to the nearest multiple of 4*patch_size to enable both patching and windowing
     base_num_patches_per_window = resolution // (patch_size * num_windows)
     offsets = [-3, -2, -1, 0, 1, 2, 3, 4] if not expanded_scales else [-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5]
+    if min_offset is not None:
+        offsets = [offset for offset in offsets if offset >= min_offset]
+    if max_offset is not None:
+        offsets = [offset for offset in offsets if offset <= max_offset]
     scales = [base_num_patches_per_window + offset for offset in offsets]
     proposed_scales = [scale * patch_size * num_windows for scale in scales]
     proposed_scales = [
         scale for scale in proposed_scales if scale >= patch_size * num_windows * 2
     ]  # ensure minimum image size
+    if not proposed_scales:
+        raise ValueError(
+            "No valid multi-scale candidates remain after applying offset bounds "
+            f"min_offset={min_offset}, max_offset={max_offset}."
+        )
     return proposed_scales
 
 
@@ -375,6 +386,8 @@ def make_coco_transforms(
     skip_random_resize: bool = False,
     patch_size: int = 16,
     num_windows: int = 4,
+    multi_scale_min_offset: Optional[int] = None,
+    multi_scale_max_offset: Optional[int] = None,
     aug_config: Optional[Dict[str, Dict[str, Any]]] = None,
     gpu_postprocess: bool = False,
 ) -> Compose:
@@ -407,6 +420,8 @@ def make_coco_transforms(
             ensure all candidate resolutions are compatible with the backbone.
         num_windows: Number of attention windows; used by
             :func:`compute_multi_scale_scales` to derive candidate resolutions.
+        multi_scale_min_offset: Optional lower offset bound for multi-scale candidates.
+        multi_scale_max_offset: Optional upper offset bound for multi-scale candidates.
         aug_config: Albumentations augmentation config dict passed to
             :class:`~rfdetr.datasets.transforms.AlbumentationsWrapper`.  Falls back to the default
             :data:`~rfdetr.datasets.aug_config.AUG_CONFIG` when ``None``.
@@ -434,7 +449,14 @@ def make_coco_transforms(
     scales = [resolution]
     if multi_scale:
         # scales = [448, 512, 576, 640, 704, 768, 832, 896]
-        scales = compute_multi_scale_scales(resolution, expanded_scales, patch_size, num_windows)
+        scales = compute_multi_scale_scales(
+            resolution,
+            expanded_scales,
+            patch_size,
+            num_windows,
+            min_offset=multi_scale_min_offset,
+            max_offset=multi_scale_max_offset,
+        )
         if skip_random_resize:
             scales = [scales[-1]]
         logger.info(f"Using multi-scale training with scales: {scales}")
@@ -476,6 +498,8 @@ def make_coco_transforms_square_div_64(
     skip_random_resize: bool = False,
     patch_size: int = 16,
     num_windows: int = 4,
+    multi_scale_min_offset: Optional[int] = None,
+    multi_scale_max_offset: Optional[int] = None,
     aug_config: Optional[Dict[str, Dict[str, Any]]] = None,
     gpu_postprocess: bool = False,
 ) -> Compose:
@@ -504,6 +528,8 @@ def make_coco_transforms_square_div_64(
             determining valid square resolutions (typically related to the model's patch embedding or stride).
         num_windows: Number of windows used by ``compute_multi_scale_scales`` to
             derive the list of candidate square resolutions.
+        multi_scale_min_offset: Optional lower offset bound for multi-scale candidates.
+        multi_scale_max_offset: Optional upper offset bound for multi-scale candidates.
         aug_config: Augmentation configuration dictionary compatible with
             :class:`~rfdetr.datasets.transforms.AlbumentationsWrapper`. If ``None``, the default
             :data:`~rfdetr.datasets.aug_config.AUG_CONFIG` is used.
@@ -521,7 +547,14 @@ def make_coco_transforms_square_div_64(
     scales = [resolution]
     if multi_scale:
         # scales = [448, 512, 576, 640, 704, 768, 832, 896]
-        scales = compute_multi_scale_scales(resolution, expanded_scales, patch_size, num_windows)
+        scales = compute_multi_scale_scales(
+            resolution,
+            expanded_scales,
+            patch_size,
+            num_windows,
+            min_offset=multi_scale_min_offset,
+            max_offset=multi_scale_max_offset,
+        )
         if skip_random_resize:
             scales = [scales[-1]]
         logger.info(f"Using multi-scale training with square resize and scales: {scales}")
@@ -585,6 +618,8 @@ def build_coco(image_set: str, args: Any, resolution: int) -> CocoDetection:
                 skip_random_resize=not args.do_random_resize_via_padding,
                 patch_size=args.patch_size,
                 num_windows=args.num_windows,
+                multi_scale_min_offset=args.multi_scale_min_offset,
+                multi_scale_max_offset=args.multi_scale_max_offset,
                 aug_config=aug_config,
                 gpu_postprocess=gpu_postprocess,
             ),
@@ -603,6 +638,8 @@ def build_coco(image_set: str, args: Any, resolution: int) -> CocoDetection:
                 skip_random_resize=not args.do_random_resize_via_padding,
                 patch_size=args.patch_size,
                 num_windows=args.num_windows,
+                multi_scale_min_offset=args.multi_scale_min_offset,
+                multi_scale_max_offset=args.multi_scale_max_offset,
                 aug_config=aug_config,
                 gpu_postprocess=gpu_postprocess,
             ),
@@ -649,6 +686,8 @@ def build_roboflow_from_coco(image_set: str, args: Any, resolution: int) -> Coco
     do_random_resize_via_padding = getattr(args, "do_random_resize_via_padding", False)
     patch_size = getattr(args, "patch_size", 16)
     num_windows = getattr(args, "num_windows", 4)
+    multi_scale_min_offset = getattr(args, "multi_scale_min_offset", None)
+    multi_scale_max_offset = getattr(args, "multi_scale_max_offset", None)
     aug_config = getattr(args, "aug_config", None)
     resolved_augmentation_backend = _resolve_runtime_augmentation_backend(getattr(args, "augmentation_backend", "cpu"))
     gpu_postprocess = resolved_augmentation_backend != "cpu"
@@ -666,6 +705,8 @@ def build_roboflow_from_coco(image_set: str, args: Any, resolution: int) -> Coco
                 skip_random_resize=not do_random_resize_via_padding,
                 patch_size=patch_size,
                 num_windows=num_windows,
+                multi_scale_min_offset=multi_scale_min_offset,
+                multi_scale_max_offset=multi_scale_max_offset,
                 aug_config=aug_config,
                 gpu_postprocess=gpu_postprocess,
             ),
@@ -685,6 +726,8 @@ def build_roboflow_from_coco(image_set: str, args: Any, resolution: int) -> Coco
                 skip_random_resize=not do_random_resize_via_padding,
                 patch_size=patch_size,
                 num_windows=num_windows,
+                multi_scale_min_offset=multi_scale_min_offset,
+                multi_scale_max_offset=multi_scale_max_offset,
                 aug_config=aug_config,
                 gpu_postprocess=gpu_postprocess,
             ),

@@ -52,6 +52,8 @@ def build_o365_raw(image_set: str, args: Any, resolution: int) -> CocoDetection:
                 resolution,
                 multi_scale=args.multi_scale,
                 expanded_scales=args.expanded_scales,
+                multi_scale_min_offset=args.multi_scale_min_offset,
+                multi_scale_max_offset=args.multi_scale_max_offset,
                 gpu_postprocess=gpu_postprocess,
             ),
         )
@@ -64,6 +66,8 @@ def build_o365_raw(image_set: str, args: Any, resolution: int) -> CocoDetection:
                 resolution,
                 multi_scale=args.multi_scale,
                 expanded_scales=args.expanded_scales,
+                multi_scale_min_offset=args.multi_scale_min_offset,
+                multi_scale_max_offset=args.multi_scale_max_offset,
                 gpu_postprocess=gpu_postprocess,
             ),
         )
