@@ -261,12 +261,14 @@ model.train(
     epochs=100,
     batch_size=1,
     grad_accum_steps=16,
+    multi_scale=True,
+    expanded_scales=False,
     device="cuda",
 )
 PY
 ```
 
-This example assumes the DEIMv2 WholeBody dataset has been placed directly under the RF-DETR repository as `wholebody49/`, with parquet annotations under `wholebody49/annotations/`. WholeBody-specific mask, segmentation evaluation, center-target, parquet preload, and `num_queries=num_select=1240` defaults are applied when `dataset_file="deimv2_coco"` and `augmentation_profile="deimv2"` are used; keep `num_classes=49` explicit so the detection head matches the copied WholeBody49 dataset.
+This example assumes the DEIMv2 WholeBody dataset has been placed directly under the RF-DETR repository as `wholebody49/`, with parquet annotations under `wholebody49/annotations/`. WholeBody-specific mask, segmentation evaluation, center-target, parquet preload, and `num_queries=num_select=1240` defaults are applied when `dataset_file="deimv2_coco"` and `augmentation_profile="deimv2"` are used; keep `num_classes=49` explicit so the detection head matches the copied WholeBody49 dataset. The sample keeps RF-DETR multi-scale training enabled but sets `expanded_scales=False`, so `RFDETRSegXLarge` samples up to `720x720` instead of the expanded `744x744` maximum.
 
 With `augmentation_profile="deimv2"`, RF-DETR uses the DEIMv2-compatible CPU transform pipeline for the `deimv2_coco` dataset. The default training sample pipeline is:
 
@@ -336,6 +338,8 @@ model.train(
     epochs=100,
     batch_size=1,
     grad_accum_steps=16,
+    multi_scale=True,
+    expanded_scales=False,
     device="cuda",
 )
 PY
@@ -360,6 +364,8 @@ model.train(
     epochs=100,
     batch_size=1,
     grad_accum_steps=16,
+    multi_scale=True,
+    expanded_scales=False,
     resume="${OUTPUT_DIR}/last.ckpt",
     device="cuda",
 )
