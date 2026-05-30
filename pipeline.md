@@ -321,6 +321,30 @@ do_random_resize_via_padding=True
 
 通常はデフォルトの `square_resize_div_64=True`, `do_random_resize_via_padding=False` で始めます。元画像のアスペクト比維持を重視する場合は `square_resize_div_64=False` を検討します。batch 側 interpolate を避けたい、または sample ごとの multi-scale + padding の挙動を試したい場合だけ `do_random_resize_via_padding=True` を検討します。
 
+### 画像スケーリングで Pillow が使われるか
+
+ローカル学習パイプラインでは、画像の読み込みには Pillow が使われますが、resize / crop 後 resize などのスケーリング本体は Pillow ではありません。
+
+処理ごとの実体は以下です。
+
+| 処理                                                           | 実装箇所                                   | スケーリング実体                                       |
+| -------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------ |
+| dataset 画像読み込み                                           | `torchvision.datasets.CocoDetection`       | `PIL.Image.open(...).convert("RGB")`                   |
+| RF-DETR の COCO annotation 変換                                | `src/rfdetr/datasets/coco.py`              | Pillow 画像サイズを参照するだけ                        |
+| train/val/test の dataset resize                               | `AlbumentationsWrapper` + Albumentations   | NumPy 配列に変換後、Albumentations 経由の `cv2.resize` |
+| `RandomSizedCrop` の crop 後 resize                            | Albumentations                             | crop は NumPy、resize は `cv2.resize`                  |
+| segmentation mask の resize                                    | Albumentations                             | `cv2.resize`。デフォルトは mask 用 nearest             |
+| `do_random_resize_via_padding=False` 時の batch 側 multi-scale | `RFDETRModelModule.on_train_batch_start()` | `torch.nn.functional.interpolate`                      |
+| `augmentation_backend="gpu"` 時の augmentation                 | Kornia                                     | GPU tensor 上の Kornia transform                       |
+
+`src/rfdetr/datasets/transforms.py` の `AlbumentationsWrapper` は、入力の `PIL.Image` を `np.array(image)` に変換してから Albumentations に渡し、出力を `Image.fromarray(...)` で PIL に戻します。この `Image.fromarray(...)` は形式変換であり、resize の実体ではありません。
+
+`pyproject.toml` では training extra に `albumentations==2.0.8` が固定されています。このバージョンの `Resize`, `SmallestMaxSize`, `LongestMaxSize`, `RandomSizedCrop` は内部で Albumentations / albucore の `resize()` を呼び、最終的に `cv2.resize` を使います。デフォルト interpolation は画像が `cv2.INTER_LINEAR`、mask が `cv2.INTER_NEAREST` です。
+
+推論 API の `RFDETR.predict()` も、文字列 path の読み込みには `PIL.Image.open()` を使います。ただし、resize 前に `torchvision.transforms.functional.to_tensor()` で tensor 化し、その後 `torchvision.transforms.functional.resize()` を tensor に対して呼ぶため、通常の `predict()` の入力 resize も Pillow resize ではありません。
+
+例外として、export / deploy 用の補助コードやドキュメントには `PIL.Image.resize()` を使うサンプルがあります。これはローカル学習の `RFDETRDataModule` / `CocoDetection` pipeline とは別経路です。
+
 ### Lightning batch 側の multi-scale
 
 デフォルトでは dataset 側の transform に加えて、`RFDETRModelModule.on_train_batch_start()` でも学習 batch ごとに multi-scale resize が走ります。
