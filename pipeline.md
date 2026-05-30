@@ -187,6 +187,198 @@ model.train(
 
 `batch_size * grad_accum_steps` が単一 GPU での effective batch size です。上の例では `1 * 16 = 16` になります。メモリに余裕があれば `batch_size=2, grad_accum_steps=8` や `batch_size=4, grad_accum_steps=4` に上げます。
 
+## デフォルト augmentation の処理
+
+`model.train()` で `aug_config` を指定しない場合、学習 split にはデフォルト augmentation が有効です。validation / test split にはランダム augmentation は入りません。
+
+デフォルト設定の要点は以下です。
+
+| 設定                           | デフォルト値                     | 意味                                                       |
+| ------------------------------ | -------------------------------- | ---------------------------------------------------------- |
+| `aug_config`                   | `None`                           | `src/rfdetr/datasets/aug_config.py` の `AUG_CONFIG` を使う |
+| `AUG_CONFIG`                   | `{"HorizontalFlip": {"p": 0.5}}` | 50% の左右反転だけが有効                                   |
+| `augmentation_backend`         | `"cpu"`                          | Albumentations 系 transform を dataset 側で実行する        |
+| `multi_scale`                  | `True`                           | 学習 batch 開始時にもランダム resize を行う                |
+| `expanded_scales`              | `True`                           | 解像度候補を広めに取る                                     |
+| `square_resize_div_64`         | `True`                           | train/valid/test を正方形 resize 系 pipeline にする        |
+| `do_random_resize_via_padding` | `False`                          | dataset 側は最大 scale 固定、batch 側で multi-scale する   |
+
+### 学習 dataset 側の transform
+
+`RFDETRSegXLarge` のデフォルトでは `resolution=624`, `patch_size=12`, `num_windows=2` なので、必須ブロックサイズは `24` です。`multi_scale=True` かつ `expanded_scales=True` の場合、学習用の scale 候補は次の 11 個になります。
+
+```text
+504, 528, 552, 576, 600, 624, 648, 672, 696, 720, 744
+```
+
+COCO / Roboflow segmentation の train split では、dataset の `__getitem__` 時におおむね次の順で処理されます。
+
+```text
+画像 + COCO annotation 読み込み
+  -> segmentation polygon/RLE から mask target を作成
+  -> ランダム resize/crop
+     - 直接 Resize(height=s, width=s)
+     - または SmallestMaxSize(400/500/600)
+       -> RandomSizedCrop(min_max_height=[384, 600])
+       -> Resize(height=s, width=s)
+  -> AlbumentationsWrapper(AUG_CONFIG)
+     - HorizontalFlip(p=0.5)
+  -> ToImage()
+  -> ToDtype(torch.float32, scale=True)
+  -> Normalize(ImageNet mean/std)
+     - bbox は絶対 xyxy から正規化 cxcywh に変換
+```
+
+デフォルトの `do_random_resize_via_padding=False` では、dataset 側の `s` は scale 候補の最大値 `744` に固定されます。その後の Lightning batch 側で、実際に使う scale が batch ごとに `504` から `744` の範囲で選ばれます。`HorizontalFlip` や resize/crop は幾何変換なので、画像、bbox、segmentation mask が同じ変換で更新されます。mask だけが置き去りになる処理ではありません。
+
+validation / test split では固定の `Resize(height=624, width=624)`、`ToImage()`、`ToDtype()`、`Normalize()` が使われ、`HorizontalFlip` や random crop は入りません。
+
+### `square_resize_div_64` の分岐
+
+`square_resize_div_64=True` は `make_coco_transforms_square_div_64()` を使う設定です。名前に `div_64` とありますが、`RFDETRSegXLarge` で実際に重要なのは `patch_size * num_windows = 24` の倍数です。`resolution=624` と multi-scale 候補はこの `24` の倍数になるように作られ、DataLoader の `collate_fn` も batch の `H` / `W` を `24` の倍数へ padding します。
+
+挙動は以下です。
+
+```text
+square_resize_div_64=True
+  train:
+    - 正方形 Resize(height=s, width=s)
+    - または SmallestMaxSize(400/500/600)
+      -> RandomSizedCrop(...)
+      -> 正方形 Resize(height=s, width=s)
+  val/test/val_speed:
+    - 固定 Resize(height=resolution, width=resolution)
+```
+
+この設定ではアスペクト比は保持されません。最終的に正方形へ resize されます。RF-DETR の既定学習経路ではこの設定が有効で、`RFDETRSegXLarge` のローカル単一 GPU 学習でも基本はこれを前提にします。
+
+`square_resize_div_64=False` にすると `make_coco_transforms()` を使います。train split は短辺側を `s` に合わせ、長辺を最大 `1333` に抑える非正方形 pipeline になります。
+
+```text
+square_resize_div_64=False
+  train:
+    - SmallestMaxSize(max_size=s)
+      -> LongestMaxSize(max_size=1333)
+    - または SmallestMaxSize(400/500/600)
+      -> RandomCrop(height=384, width=384)
+      -> SmallestMaxSize(max_size=s)
+      -> LongestMaxSize(max_size=1333)
+  val/test:
+    - SmallestMaxSize(max_size=resolution)
+      -> LongestMaxSize(max_size=1333)
+  val_speed:
+    - 固定 Resize(height=resolution, width=resolution)
+```
+
+非正方形 pipeline でも、最後に DataLoader の `make_collate_fn(block_size=patch_size * num_windows)` が batch 内の最大 `H` / `W` を `24` の倍数に切り上げて padding します。つまり、`square_resize_div_64=False` は「padding しない」という意味ではなく、「dataset transform で正方形に潰さず、collate で必要な分だけ padding する」という意味です。
+
+### `do_random_resize_via_padding` の分岐
+
+`do_random_resize_via_padding` は、multi-scale のランダム性を dataset 側で入れるか、Lightning batch 側で入れるかを切り替えます。
+
+デフォルトの `False` では、dataset builder が transform に `skip_random_resize=True` を渡します。
+
+```text
+do_random_resize_via_padding=False
+  dataset transform:
+    - multi-scale 候補を計算する
+    - ただし resize target は最大 scale のみを使う
+    - RFDETRSegXLarge では s=744
+  collate:
+    - batch を block_size=24 の倍数へ padding
+  on_train_batch_start:
+    - global_step を seed にして scale を選ぶ
+    - samples.tensors と samples.mask を選択 scale へ interpolate
+```
+
+この場合、auto batch probe も最大 scale を使うため、`RFDETRSegXLarge` では概ね `744x744` 相当を基準に micro batch を探します。OOM を避けるには保守的ですが、batch 開始時の resize により training step の入力解像度は batch ごとに変わります。
+
+`True` にすると、dataset builder が transform に `skip_random_resize=False` を渡し、`RFDETRModelModule.on_train_batch_start()` の追加 resize は止まります。
+
+```text
+do_random_resize_via_padding=True
+  dataset transform:
+    - 各 sample の resize/crop target s を multi-scale 候補から選ぶ
+    - RFDETRSegXLarge では 504..744 のいずれか
+  collate:
+    - batch 内の最大 H/W に合わせる
+    - さらに block_size=24 の倍数へ切り上げて padding
+    - padding 領域は NestedTensor.mask で model に渡す
+  on_train_batch_start:
+    - multi-scale resize は実行しない
+```
+
+この場合は sample ごとのサイズ差を padding mask で扱います。batch 内に大きい sample が混じると、その batch 全体の padded tensor は大きくなるため、メモリ使用量は batch 構成に依存します。一方で、batch 開始時の追加 interpolate を避けられます。
+
+整理すると次の通りです。
+
+| 設定組み合わせ                                                     | train resize の形                    | multi-scale が入る場所   | batch の揃え方                          |
+| ------------------------------------------------------------------ | ------------------------------------ | ------------------------ | --------------------------------------- |
+| `square_resize_div_64=True`, `do_random_resize_via_padding=False`  | 正方形、dataset 側は最大 scale       | `on_train_batch_start()` | resize 後に `24` の倍数へ padding       |
+| `square_resize_div_64=True`, `do_random_resize_via_padding=True`   | 正方形、sample ごとに random scale   | dataset transform        | batch 最大 scale に合わせて padding     |
+| `square_resize_div_64=False`, `do_random_resize_via_padding=False` | 非正方形、dataset 側は最大 scale     | `on_train_batch_start()` | batch 最大 H/W を `24` の倍数へ padding |
+| `square_resize_div_64=False`, `do_random_resize_via_padding=True`  | 非正方形、sample ごとに random scale | dataset transform        | batch 最大 H/W を `24` の倍数へ padding |
+
+通常はデフォルトの `square_resize_div_64=True`, `do_random_resize_via_padding=False` で始めます。元画像のアスペクト比維持を重視する場合は `square_resize_div_64=False` を検討します。batch 側 interpolate を避けたい、または sample ごとの multi-scale + padding の挙動を試したい場合だけ `do_random_resize_via_padding=True` を検討します。
+
+### Lightning batch 側の multi-scale
+
+デフォルトでは dataset 側の transform に加えて、`RFDETRModelModule.on_train_batch_start()` でも学習 batch ごとに multi-scale resize が走ります。
+
+```text
+train DataLoader batch
+  -> collate_fn で patch_size * num_windows = 24 の倍数に揃える
+  -> on_train_batch_start()
+     - global_step で seed を固定
+     - scale 候補から 1 つ選ぶ
+     - samples.tensors と samples.mask を interpolate
+  -> training_step()
+```
+
+この段階では target bbox は正規化済みなので、画像 tensor と padding mask を同じ scale に resize します。`multi_scale=False` にすると、この batch 側の resize は止まります。
+
+### augmentation を変える / 止める
+
+デフォルトの左右反転だけを止めたい場合は `aug_config={}` を渡します。ただし、これは `AUG_CONFIG` を空にするだけです。dataset 側の resize/crop、batch 側の `multi_scale`、正規化までは止まりません。
+
+```python
+model.train(
+    dataset_dir=DATASET_DIR,
+    output_dir=OUTPUT_DIR,
+    aug_config={},
+    device="cuda",
+)
+```
+
+左右反転と batch 側 multi-scale の両方を止め、より固定的な設定に寄せる例です。
+
+```python
+model.train(
+    dataset_dir=DATASET_DIR,
+    output_dir=OUTPUT_DIR,
+    aug_config={},
+    multi_scale=False,
+    device="cuda",
+)
+```
+
+用意済み preset を使う場合は `src/rfdetr/datasets/aug_config.py` から import します。
+
+```python
+from rfdetr.datasets.aug_config import AUG_CONSERVATIVE
+
+model.train(
+    dataset_dir=DATASET_DIR,
+    output_dir=OUTPUT_DIR,
+    aug_config=AUG_CONSERVATIVE,
+    device="cuda",
+)
+```
+
+代表的な preset は `AUG_CONSERVATIVE`, `AUG_AGGRESSIVE`, `AUG_AERIAL`, `AUG_INDUSTRIAL` です。インスタンスセグメンテーションでは mask と bbox が同時に変換される必要があるため、まずはデフォルトか `AUG_CONSERVATIVE` で validation mAP を確認し、過度な回転・shear・blur を一度に入れない方が調査しやすくなります。
+
+`augmentation_backend="auto"` または `"gpu"` を指定すると、条件が合う場合は Kornia による GPU augmentation / normalize に切り替わります。今回の単一 GPU ローカル学習手順では、挙動確認が容易なデフォルトの `augmentation_backend="cpu"` を基準にします。
+
 ## 実行監視と成果物
 
 TensorBoard は `output_dir` を見ます。
